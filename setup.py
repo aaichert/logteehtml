@@ -27,8 +27,6 @@ setup(
     description="A simple but powerful HTML logging module with stream redirection and Rich integration",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Andreas Aichert",
-    author_email="andreas.aichert@gmail.com",
     url="https://github.com/aaichert/logteehtml",
     packages=find_packages(),
     python_requires=">=3.8",
