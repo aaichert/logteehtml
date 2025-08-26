@@ -40,10 +40,10 @@ rich = ["rich>=10.0.0"]
 dev = ["pytest>=6.0.0", "black", "flake8", "build", "twine"]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/logteehtml"
-Documentation = "https://github.com/yourusername/logteehtml#readme"
-Repository = "https://github.com/yourusername/logteehtml.git"
-"Bug Tracker" = "https://github.com/yourusername/logteehtml/issues"
+Homepage = "https://github.com/aaichert/logteehtml"
+Documentation = "https://github.com/aaichert/logteehtml#readme"
+Repository = "https://github.com/aaichert/logteehtml.git"
+"Bug Tracker" = "https://github.com/aaichert/logteehtml/issues"
 
 [tool.setuptools.dynamic]
 version = {attr = "logteehtml.__version__.__version__"}
