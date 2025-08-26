@@ -21,12 +21,14 @@ if os.path.exists(readme_path):
 
 setup(
     name="logteehtml",
-    version=version_dict['__version__'],
-    description="Comprehensive HTML logging with rich content support",
+    version="0.1.0",
+    author="André Aichert",
+    author_email="aaichert@gmail.com",
+    description="A simple but powerful HTML logging module with stream redirection and Rich integration",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Andreas Aichert",
+    author_email="andreas.aichert@gmail.com",
     url="https://github.com/aaichert/logteehtml",
     packages=find_packages(),
     python_requires=">=3.8",
