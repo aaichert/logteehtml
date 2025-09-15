@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{title}</title>
+  <style>
+	body { background:#0b0f14;color:#c9d1d9;font-family: monospace; margin:0; padding:0; }
+	.log { padding:1rem; max-width:1200px; margin-left:260px; }
+	.stdout pre, .stderr pre { white-space:pre-wrap; margin:0; font-family:inherit; }
+	.stderr pre { color: #ff7b72 }
+	.toc { position:fixed; left:0; top:0; bottom:0; width:240px; overflow:auto; background:#061118; padding:1rem; border-right:1px solid #0f1720 }
+  </style>
+  <script>
+	function buildTOC() {
+	  const toc = document.getElementById('logtee-toc');
+	  if(!toc) return;
+	  toc.innerHTML = '';
+	  const sections = Array.from(document.querySelectorAll('h1'));
+	  sections.forEach(s => {
+		const h = document.createElement('div');
+		h.innerHTML = '<strong>'+s.textContent+'</strong>';
+		toc.appendChild(h);
+		const anchors = Array.from(s.parentElement.querySelectorAll('h2'))
+		  .filter(a => a.dataset.section === s.id);
+		anchors.forEach(a => {
+		  const l = document.createElement('div');
+		  l.style.paddingLeft = '8px';
+		  const ael = document.createElement('a');
+		  ael.href = '#'+a.id;
+		  ael.textContent = a.textContent;
+		  l.appendChild(ael);
+		  toc.appendChild(l);
+		});
+	  });
+	}
+	window.addEventListener('load', buildTOC);
+  </script>
+</head>
+<body>
+  <div class="toc" id="logtee-toc"></div>
+  <div class="log" id="logtee-log">
+  <!-- INSERT_LOG -->
+  <!-- LOGTEEHTML_FOOTER -->
+  <!-- FOOTER_BEGIN -->
+  </div>
+</body>
+</html>

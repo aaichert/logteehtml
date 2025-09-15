@@ -10,7 +10,7 @@ from typing import Optional
 import fcntl
 from PIL import Image
 
-_FOOTER_MARKER = "<!-- LOGTEEHTML_FOOTER_MARKER -->"
+_FOOTER_MARKER = "<!-- LOGTEEHTML_FOOTER -->"
 _CHUNK_CLOSER = "</pre></div>\n"
 
 
@@ -95,59 +95,6 @@ def _escape_html(text: str) -> str:
 		.replace(">", "&gt;")
 	)
 
-
-_DEFAULT_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{title}</title>
-  <style>
-	body {{ background:#0b0f14;color:#c9d1d9;font-family: monospace; margin:0; padding:0; }}
-	.log {{ padding:1rem; max-width:1200px; margin-left:260px; }}
-	.stdout pre, .stderr pre {{ white-space:pre-wrap; margin:0; font-family:inherit; }}
-	.stderr pre {{ color: #ff7b72 }}
-	.toc {{ position:fixed; left:0; top:0; bottom:0; width:240px; overflow:auto; background:#061118; padding:1rem; border-right:1px solid #0f1720 }}
-  </style>
-  <script>
-	function buildTOC() {{
-	  const toc = document.getElementById('logtee-toc');
-	  if(!toc) return;
-	  toc.innerHTML = '';
-	  const sections = Array.from(document.querySelectorAll('h1'));
-	  sections.forEach(s => {{
-		const h = document.createElement('div');
-		h.innerHTML = '<strong>'+s.textContent+'</strong>';
-		toc.appendChild(h);
-		const anchors = Array.from(s.parentElement.querySelectorAll('h2'))
-		  .filter(a => a.dataset.section === s.id);
-		anchors.forEach(a => {{
-		  const l = document.createElement('div');
-		  l.style.paddingLeft = '8px';
-		  const ael = document.createElement('a');
-		  ael.href = '#'+a.id;
-		  ael.textContent = a.textContent;
-		  l.appendChild(ael);
-		  toc.appendChild(l);
-		}});
-	  }});
-	}}
-	window.addEventListener('load', buildTOC);
-  </script>
-</head>
-<body>
-  <div class="toc" id="logtee-toc"></div>
-  <div class="log" id="logtee-log">
-  <!-- INSERT_LOG -->
-  {marker}
-  <!-- FOOTER_BEGIN -->
-  </div>
-  <script>/* Footer JS / TOC helpers could go here */</script>
-</body>
-</html>
-"""
-
-
 class _StreamProxy:
 	"""Proxy for sys.stdout/sys.stderr that writes to the terminal and also forwards to LogTeeHTML."""
 	def __init__(self, logger, chunk_type: str, orig):
@@ -166,12 +113,6 @@ class _StreamProxy:
 		self._orig.write(s)
 		self._orig.flush()
 
-		# Forward raw writes to the logger so ANSI sequences and CRs remain intact
-		# Avoid forwarding the special clickable anchor lines that are printed
-		# directly to the real stdout by anchor(). They typically start with '[🔗'.
-		if not s:
-			return
-		# If the write looks exactly like the clickable link we skip it.
 		if s.startswith('[🔗') and '](file://' in s:
 			return
 		# Forward the full chunk as-is; LogTeeHTML will decide merge semantics.
@@ -199,43 +140,36 @@ class LogTeeHTML:
 	  last chunk's closing tag; this is achieved by locating the footer marker and overwriting the closing tag region.
 	"""
 
-	def __init__(self, log_name: str, suffix: Optional[str] = None, path_prefix: Optional[str] = None, logfile_prefix: Optional[str] = None, template: Optional[str] = None):
+	def __init__(self, log_name: str, suffix: Optional[str] = None, path_prefix: Optional[str] = None, logfile_prefix: Optional[str] = None, template: str = 'pretty.html'):
 		self.log_name = _slugify(log_name)
 		if suffix is None:
 			suffix = datetime.now().strftime("_%Y%m%d_%H%M")
 		self.suffix = suffix
 		self.path_prefix = path_prefix
 		self.logfile_prefix = logfile_prefix
-		self.template = template or _DEFAULT_TEMPLATE
-
+		template_dir = os.path.dirname(os.path.abspath(__file__))
+		template_path = os.path.join(template_dir, template)
+		with open(template_path, "r", encoding="utf-8") as f:
+			self.template = f.read()
+		self.template.replace("{title}", self.log_name)
 		self.filepath = f"{self.log_name}{self.suffix}.html"
 		self._fh = None
 		self._last_chunk_type = None
-		# base stream used for merging ('stdout' or 'stderr')
 		self._last_chunk_base: Optional[str] = None
-		# in-memory cache for marker position (no on-disk sidecar)
 		self._marker_pos_cache: Optional[int] = None
 
 	def __enter__(self):
-		# Create/overwrite file and write template with marker
-		content = self.template.format(title=self.log_name, marker=_FOOTER_MARKER)
-		# ensure parent dir exists
 		dirname = os.path.dirname(self.filepath)
 		if dirname:
 			os.makedirs(dirname, exist_ok=True)
-		# write file atomically by writing all at once (template is small)
 		with open(self.filepath, 'wb') as f:
-			f.write(content.encode('utf8'))
-		# open file for read/write binary operations
+			f.write(self.template.encode('utf8'))
 		self._fh = open(self.filepath, 'r+b')
-		# ensure marker is present
 		if _FOOTER_MARKER.encode('utf8') not in self._fh.read():
 			raise RuntimeError('Footer marker missing in template')
-		# reset position
 		self._fh.seek(0, io.SEEK_SET)
 		self._marker_pos_cache = self._find_marker()
 
-		# redirect sys.stdout and sys.stderr so we capture prints
 		self._orig_stdout = sys.stdout
 		self._orig_stderr = sys.stderr
 		sys.stdout = _StreamProxy(self, 'stdout', self._orig_stdout)
