@@ -1,61 +1,22 @@
 # LogTeeHTML
 
-A comprehensive Python logging package that creates beautiful HTML logs with rich content support.
+This package provides `LogTeeHTML`, a context-managed HTML logger that keeps the on-disk file valid by seeking and rewriting a small footer region on each append.
 
-## Overview
-
-LogTeeHTML automatically captures your program's output and creates interactive HTML logs with a professional dark theme, making it easy to review and share your results.
-
-## Features
-
-- 📊 **Multiple output formats** - HTML, JSON, and TXT files
-- 🎨 **Dark theme** with responsive design  
-- 🔗 **Interactive navigation** - Fixed sidebar with clickable table of contents
-- ⏰ **Timestamp tooltips** - Hover to see exact timing
-- 📷 **Image embedding** - Embed PIL images directly
-- 🌈 **Rich integration** - Tables, progress bars, syntax highlighting
-- 📱 **Stream capture** - Automatically logs `print()` and errors
-
-## Quick Start
+Quick usage:
 
 ```python
-from logteehtml import LogTeeHTML
+from logteehtml.core import LogTeeHTML
 
-# Create logger
-logger = LogTeeHTML("my_experiment")
-
-# Start a stage
-logger.start("Data Processing")
-print("Loading data...")  # Automatically captured
-
-# Add custom content
-logger.inject_html("<h3>Results Summary</h3>", "Summary")
-
-# Add images
-from PIL import Image
-img = Image.new('RGB', (100, 100), 'blue')
-logger.inject_image(img, "Test Plot")
+with LogTeeHTML('mylog') as logger:
+    logger.start('Training')
+    logger.print('Progress 1')
+    logger.anchor('Epoch 1')
+    logger.inject_json({'a':1}, 'metadata')
 ```
 
-This generates:
-- `my_experiment.html` - Interactive log with dark theme
-- `my_experiment.json` - Structured data
-- `my_experiment.txt` - Plain text version
+Notes:
+- Version 1 uses a seek-and-rewrite-footer strategy so the file on disk is always a valid HTML document and the TOC/JS can run while logging.
+- The implementation uses simple ANSI->HTML mapping and basic carriage-return handling. For higher fidelity colors use a dedicated converter.
 
-## Installation
-
-```bash
-pip install logteehtml
-```
-
-**Dependencies:**
-- Pillow (required)
-- Rich (optional, for advanced formatting)
-
-## Documentation
-
-See `REQUIREMENTS.md` for detailed technical specifications.
-
----
-
-**Note:** This project was created entirely by VS Code's AI Agent (GitHub Copilot) as a test case for AI-driven software development.
+Tests:
+- A basic test is included under `tests/test_logteehtml_basic.py` (creates a temporary file). Run tests with `pytest`.

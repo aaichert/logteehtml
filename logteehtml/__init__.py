@@ -1,18 +1,16 @@
 """
-HTML Logger - A comprehensive Python logging module that creates beautiful HTML logs.
+LogTeeHTML - A logging utility that captures terminal output while preserving appearance and creating structured HTML logs.
 
 Features:
 - HTML and text log generation with dark mode
 - Interactive table of contents with timestamps
 - Image embedding (PIL support)
-- Rich library integration for advanced formatting
 - Stream redirection for automatic capture
-- Responsive design for various screen sizes
+- Rich library integration
+- ANSI color code preservation
 """
 
-from .core import LogTeeHTML
-from .__version__ import __version__
+from .logteehtml import LogTeeHTML
 
+__version__ = "0.1.0"
 __all__ = ['LogTeeHTML']
-__author__ = "Your Name"
-__email__ = "your.email@example.com"

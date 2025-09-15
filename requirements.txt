@@ -1,7 +1,5 @@
 # Core dependencies
 Pillow>=8.0.0
-
-# Optional dependencies for rich formatting
 rich>=10.0.0
 
 # Development dependencies (optional)

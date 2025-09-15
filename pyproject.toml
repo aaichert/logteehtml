@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "logteehtml"
 dynamic = ["version"]
-description = "Comprehensive HTML logging with rich content support"
+description = "Comprehensive HTML logging with content support"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
@@ -15,7 +15,7 @@ authors = [
 maintainers = [
     {name = "André Aichert", email = "aaichert@gmail.com"}
 ]
-keywords = ["logging", "html", "rich", "pillow", "documentation"]
+keywords = ["logging", "html", "pillow", "rich", "documentation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -33,10 +33,10 @@ classifiers = [
 ]
 dependencies = [
     "Pillow>=8.0.0",
+    "rich>=10.0.0",
 ]
 
 [project.optional-dependencies]
-rich = ["rich>=10.0.0"]
 dev = ["pytest>=6.0.0", "black", "flake8", "build", "twine"]
 
 [project.urls]
