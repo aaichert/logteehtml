@@ -17,13 +17,19 @@
 	  if(!toc) return;
 	  toc.innerHTML = '';
 	  const sections = Array.from(document.querySelectorAll('h1'));
-	  sections.forEach(s => {
+	  const allAnchors = Array.from(document.querySelectorAll('h2'));
+	  sections.forEach((s, i) => {
 		const h = document.createElement('div');
 		h.innerHTML = '<strong>'+s.textContent+'</strong>';
 		toc.appendChild(h);
-		const anchors = Array.from(s.parentElement.querySelectorAll('h2'))
-		  .filter(a => a.dataset.section === s.id);
-		anchors.forEach(a => {
+		const nextSection = sections[i + 1];
+		const sectionAnchors = allAnchors.filter(a => {
+		  const afterSection = a.compareDocumentPosition(s) & Node.DOCUMENT_POSITION_PRECEDING;
+		  if (!nextSection) return afterSection;
+		  const beforeNext = a.compareDocumentPosition(nextSection) & Node.DOCUMENT_POSITION_FOLLOWING;
+		  return afterSection && beforeNext;
+		});
+		sectionAnchors.forEach(a => {
 		  const l = document.createElement('div');
 		  l.style.paddingLeft = '8px';
 		  const ael = document.createElement('a');

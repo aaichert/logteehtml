@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{title}</title>
+  <title>LogTeeHTML Output</title>
   <style>
     body {
-      background: linear-gradient(120deg, #232526 0%, #0b0f14 100%);
-      color: #eaeaea;
+      background: linear-gradient(120deg, #1a1a1a 0%, #0a0a0a 100%);
+      color: #e8e8e8;
       font-family: 'Fira Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
       margin: 0;
       padding: 0;
@@ -16,128 +16,259 @@
     .log {
       padding: 1.2rem 2.2rem 2rem 2.2rem;
       max-width: 100vw;
-      margin-left: 300px;
-      background: rgba(20, 24, 32, 0.98);
+      margin-left: 320px;
+      background: rgba(15, 15, 20, 0.98);
       border-radius: 0 0 0 0;
       min-height: 100vh;
       box-sizing: border-box;
     }
-    .stdout, .stderr, .ansi-cursor {
+    .stdout, .stderr, .ansi-cursor, .html-injection {
       position: relative;
       margin: 0.7em 0;
-      border-radius: 8px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.10);
-      background: #161b22;
+      border-radius: 10px;
+      box-shadow: 0 3px 15px rgba(0,0,0,0.25);
+      background: #0f1419;
       overflow: visible;
-      transition: box-shadow 0.2s;
+      transition: all 0.3s ease;
     }
-    .stdout::before, .stderr::before, .ansi-cursor::before {
+    .stdout::before, .stderr::before, .ansi-cursor::before, .html-injection::before {
       content: "";
       position: absolute;
-      top: 0; left: -8px; bottom: 0;
-      width: 12px;
-      border-radius: 8px 0 0 8px;
-      background: linear-gradient(270deg, rgba(88,166,255,0.08) 0%, rgba(88,166,255,0.18) 100%);
+      top: 0; left: -10px; bottom: 0;
+      width: 14px;
+      border-radius: 10px 0 0 10px;
+      background: linear-gradient(270deg, rgba(88,166,255,0.12) 0%, rgba(88,166,255,0.25) 100%);
       pointer-events: none;
-      box-shadow: -2px 0 12px rgba(88,166,255,0.10);
+      box-shadow: -3px 0 15px rgba(88,166,255,0.15);
     }
     .stderr {
-      background: #2d1a1a;
+      background: #1a0f0f;
     }
     .stderr::before {
-      background: linear-gradient(270deg, rgba(255,123,114,0.10) 0%, rgba(255,123,114,0.22) 100%);
-      box-shadow: -2px 0 12px rgba(255,123,114,0.13);
+      background: linear-gradient(270deg, rgba(255,123,114,0.15) 0%, rgba(255,123,114,0.3) 100%);
+      box-shadow: -3px 0 15px rgba(255,123,114,0.18);
     }
-    .stdout pre, .stderr pre, .ansi-cursor pre {
+    .ansi-cursor {
+      background: #1a1a0f;
+    }
+    .ansi-cursor::before {
+      background: linear-gradient(270deg, rgba(255,193,7,0.15) 0%, rgba(255,193,7,0.3) 100%);
+      box-shadow: -3px 0 15px rgba(255,193,7,0.18);
+    }
+    .html-injection {
+      background: #1a1a1a;
+    }
+    .html-injection::before {
+      background: linear-gradient(270deg, rgba(180,180,180,0.2) 0%, rgba(180,180,180,0.4) 100%);
+      box-shadow: -3px 0 15px rgba(180,180,180,0.25);
+    }
+    .stdout pre, .stderr pre, .ansi-cursor pre, .html-injection pre {
       white-space: pre-wrap;
       margin: 0;
       font-family: inherit;
       font-size: 1em;
       background: none;
       border-radius: 0;
-      padding: 0.7em 1.2em 0.7em 1em;
+      padding: 0.8em 1.3em 0.8em 1.1em;
       box-shadow: none;
     }
     h1 {
-      font-size: 1.35em;
-      margin-top: 2em;
-      margin-bottom: 0.5em;
+      font-size: 1.6em;
+      margin-top: 3em;
+      margin-bottom: 0.8em;
       color: #58a6ff;
-      border-bottom: 1px solid #30363d;
-      padding-bottom: 0.1em;
-      font-weight: 600;
-      letter-spacing: 0.01em;
+      border-bottom: 3px solid #21262d;
+      padding-bottom: 0.4em;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      text-shadow: 0 2px 8px rgba(88,166,255,0.4);
+      background: linear-gradient(90deg, rgba(88,166,255,0.1) 0%, rgba(88,166,255,0.05) 50%, transparent 100%);
+      padding: 0.6em 1em 0.4em 1em;
+      border-radius: 8px 8px 0 0;
+      border-left: 4px solid #58a6ff;
+    }
+    h1:first-of-type {
+      margin-top: 1em;
     }
     h2 {
-      font-size: 1.08em;
-      margin-top: 1.2em;
-      margin-bottom: 0.4em;
+      font-size: 1.25em;
+      margin-top: 2em;
+      margin-bottom: 0.6em;
       color: #79c0ff;
-      font-weight: 500;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 4px rgba(121,192,255,0.3);
+      border-left: 3px solid #79c0ff;
+      padding-left: 0.8em;
+      background: linear-gradient(90deg, rgba(121,192,255,0.08) 0%, transparent 50%);
+      padding: 0.4em 0.8em;
+      border-radius: 4px;
     }
     table {
       border-collapse: collapse;
-      margin: 1em 0;
+      margin: 1.2em 0;
       width: 100%;
-      background: #161b22;
-      border-radius: 6px;
+      background: #0f1419;
+      border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+      box-shadow: 0 3px 12px rgba(0,0,0,0.2);
       font-size: 0.98em;
     }
     th, td {
-      border: 1px solid #30363d;
-      padding: 0.35em 0.8em;
+      border: 1px solid #21262d;
+      padding: 0.4em 0.9em;
       text-align: left;
     }
     th {
-      background: #21262d;
+      background: #161b22;
       color: #58a6ff;
-      font-weight: 600;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.9em;
     }
     .toc {
       position: fixed;
       left: 0;
       top: 0;
       bottom: 0;
-      width: 260px;
+      width: 300px;
       overflow-y: auto;
-      background: #061118;
-      padding: 1.5rem 1rem 1rem 1.2rem;
-      border-right: 2px solid #0f1720;
-      box-shadow: 2px 0 12px rgba(0,0,0,0.15);
+      background: linear-gradient(180deg, #0a0a0a 0%, #161616 100%);
+      padding: 2rem 1.5rem 1.5rem 1.8rem;
+      border-right: 3px solid #21262d;
+      box-shadow: 3px 0 20px rgba(0,0,0,0.4);
       z-index: 10;
       font-size: 13px;
     }
-    .toc h3 {
+    .toc::before {
+      content: "📋 Table of Contents";
+      display: block;
       color: #58a6ff;
-      margin: 0.5em 0 0.2em 0;
+      font-size: 1.1em;
+      font-weight: 700;
+      margin-bottom: 1.5em;
+      padding-bottom: 0.5em;
+      border-bottom: 2px solid #21262d;
+      letter-spacing: 0.02em;
+    }
+    .toc h3 {
+      color: #79c0ff;
+      margin: 1em 0 0.4em 0;
       font-size: 1em;
       font-weight: 600;
       letter-spacing: 0.02em;
+      text-transform: uppercase;
+      font-size: 0.9em;
     }
     .toc ul {
       list-style: none;
       padding: 0;
-      margin: 0 0 1em 0;
+      margin: 0 0 1.5em 0;
     }
     .toc li {
-      margin: 0.18em 0;
-      padding-left: 0.5em;
+      margin: 0.3em 0;
+      padding-left: 0.8em;
+      position: relative;
+    }
+    .toc li::before {
+      content: "▸";
+      position: absolute;
+      left: 0;
+      color: #555;
+      transition: all 0.2s ease;
+    }
+    .toc li:hover::before {
+      color: #58a6ff;
+      transform: rotate(90deg);
     }
     .toc a {
-      color: #79c0ff;
+      color: #c9d1d9;
       text-decoration: none;
-      transition: color 0.2s;
+      transition: all 0.3s ease;
       font-size: 1em;
+      display: block;
+      padding: 0.3em 0.5em;
+      border-radius: 4px;
+      border-left: 2px solid transparent;
     }
     .toc a:hover {
-      color: #ff7b72;
-      text-decoration: underline;
+      color: #58a6ff;
+      background: rgba(88,166,255,0.1);
+      border-left: 2px solid #58a6ff;
+      transform: translateX(3px);
     }
-    @media (max-width: 900px) {
+    .toc ul ul {
+      margin: 0.5em 0 0 1.2em;
+    }
+    .toc ul ul li::before {
+      content: "•";
+    }
+    .toc ul ul a {
+      font-size: 0.9em;
+      color: #8b949e;
+    }
+    
+    /* Collapsible chunks */
+    .chunk-toggle {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 16px;
+      height: 16px;
+      background-color: #2a2a2a;
+      border: 1px solid #555;
+      border-radius: 2px;
+      cursor: pointer;
+      display: none; /* Hidden by default */
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: #888;
+      z-index: 10;
+      user-select: none;
+    }
+    
+    .chunk-toggle:hover {
+      background-color: #333;
+      color: #fff;
+    }
+    
+    .chunk-toggle::after {
+      content: '▼';
+      transition: transform 0.2s;
+    }
+    
+    .collapsed .chunk-toggle::after {
+      transform: rotate(-90deg);
+    }
+    
+    /* Show toggle only for ansi-cursor chunks or large chunks */
+    .ansi-cursor .chunk-toggle,
+    .large-chunk .chunk-toggle,
+    .html-injection .chunk-toggle {
+      display: flex;
+    }
+    
+    .chunk-content {
+      transition: max-height 0.3s ease-out;
+      overflow: hidden;
+    }
+    
+    .collapsed .chunk-content {
+      max-height: 2.4em; /* Account for padding (0.8em top + 0.8em bottom) + line height */
+    }
+    
+    /* Add padding to content when toggle is visible to avoid overlap */
+    .ansi-cursor pre,
+    .large-chunk pre,
+    .html-injection pre {
+      padding-left: 24px;
+    }
+    
+    @media (max-width: 1100px) {
       .log { margin-left: 0; padding: 1rem; }
-      .toc { position: static; width: 100%; border-right: none; box-shadow: none; padding: 1rem; }
+      .toc { position: static; width: 100%; border-right: none; box-shadow: none; padding: 1.5rem; }
     }
   </style>
   <script>
@@ -145,34 +276,102 @@
       const toc = document.getElementById('logtee-toc');
       if (!toc) return;
       toc.innerHTML = '';
+      
       const sections = Array.from(document.querySelectorAll('h1'));
+      const allAnchors = Array.from(document.querySelectorAll('h2'));
       const ul = document.createElement('ul');
-      sections.forEach(s => {
+      
+      sections.forEach((section, sectionIndex) => {
         const li = document.createElement('li');
         const a = document.createElement('a');
-        a.href = '#' + s.id;
-        a.textContent = s.textContent;
+        a.href = '#' + section.id;
+        a.textContent = section.textContent;
         li.appendChild(a);
         ul.appendChild(li);
-        // Find anchors for this section
-        const anchors = Array.from(s.parentElement.querySelectorAll('h2'))
-          .filter(a => a.dataset.section === s.id);
-        if (anchors.length) {
+        
+        // Find all h2 anchors that come after this h1 and before the next h1
+        const nextSection = sections[sectionIndex + 1];
+        const sectionAnchors = allAnchors.filter(anchor => {
+          const anchorPosition = anchor.compareDocumentPosition(section);
+          const afterSection = (anchorPosition & Node.DOCUMENT_POSITION_PRECEDING) !== 0;
+          
+          if (!nextSection) {
+            return afterSection;
+          }
+          
+          const nextSectionPosition = anchor.compareDocumentPosition(nextSection);
+          const beforeNextSection = (nextSectionPosition & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+          
+          return afterSection && beforeNextSection;
+        });
+        
+        if (sectionAnchors.length > 0) {
           const subul = document.createElement('ul');
-          anchors.forEach(a2 => {
+          sectionAnchors.forEach(anchor => {
             const subli = document.createElement('li');
             const suba = document.createElement('a');
-            suba.href = '#' + a2.id;
-            suba.textContent = a2.textContent;
+            suba.href = '#' + anchor.id;
+            suba.textContent = anchor.textContent;
             subli.appendChild(suba);
             subul.appendChild(subli);
           });
           li.appendChild(subul);
         }
       });
+      
       toc.appendChild(ul);
     }
-    window.addEventListener('load', buildTOC);
+    
+    function initializeCollapsibleChunks() {
+      const chunks = document.querySelectorAll('.stdout, .stderr, .ansi-cursor, .html-injection');
+      
+      chunks.forEach(chunk => {
+        // Check if this chunk should have collapsible functionality
+        const chunkType = chunk.classList.contains('stdout') ? 'stdout' : 
+                         chunk.classList.contains('stderr') ? 'stderr' : 
+                         chunk.classList.contains('html-injection') ? 'html-injection' : 'ansi-cursor';
+        const pre = chunk.querySelector('pre');
+        const isLargeChunk = pre && (pre.textContent.split('\n').length > 5 || pre.textContent.length > 200);
+        const isAnsiChunk = chunkType === 'ansi-cursor';
+        const isHtmlInjection = chunkType === 'html-injection';
+        const shouldBeCollapsible = isAnsiChunk || isLargeChunk || isHtmlInjection;
+        
+        if (shouldBeCollapsible) {
+          // Mark as large chunk for CSS styling
+          if (isLargeChunk && !isAnsiChunk) {
+            chunk.classList.add('large-chunk');
+          }
+          
+          // Add toggle arrow
+          const toggle = document.createElement('div');
+          toggle.className = 'chunk-toggle';
+          chunk.appendChild(toggle);
+          
+          // Wrap content for collapsing
+          const content = chunk.querySelector('pre');
+          const contentWrapper = document.createElement('div');
+          contentWrapper.className = 'chunk-content';
+          content.parentNode.insertBefore(contentWrapper, content);
+          contentWrapper.appendChild(content);
+          
+          // Collapse ANSI chunks by default, but keep HTML injections expanded
+          if (isAnsiChunk) {
+            chunk.classList.add('collapsed');
+          }
+          
+          // Add click handler ONLY to the toggle arrow
+          toggle.addEventListener('click', function(e) {
+            e.stopPropagation(); // Prevent event bubbling
+            chunk.classList.toggle('collapsed');
+          });
+        }
+      });
+    }
+    
+    window.addEventListener('load', function() {
+      buildTOC();
+      initializeCollapsibleChunks();
+    });
   </script>
 </head>
 <body>

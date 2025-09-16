@@ -25,6 +25,11 @@ def _strip_ansi(text: str) -> str:
 	# Minimal ANSI escape removal. For complex SGR->HTML mapping a dedicated parser would be better.
 	return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
 
+def _is_ansi_color_or_font(seq: bytes) -> bool:
+	"""Returns True if the ANSI sequence is a color/font SGR (ESC [ ... m)."""
+	# ESC [ ... m (SGR)
+	return bool(re.search(rb'\x1b\[[0-9;]*m', seq))
+
 
 _ANSI_COLOR_MAP = {
 	30: '#000000', 31: '#aa0000', 32: '#00aa00', 33: '#aa5500',
@@ -35,6 +40,18 @@ _ANSI_COLOR_MAP = {
 _ANSI_BRIGHT_MAP = {
     90: '#555555', 91: '#ff5555', 92: '#55ff55', 93: '#ffff55',
     94: '#5555ff', 95: '#ff55ff', 96: '#55ffff', 97: '#ffffff',
+}
+
+# background colors 40-47
+_ANSI_BG_COLOR_MAP = {
+    40: '#000000', 41: '#aa0000', 42: '#00aa00', 43: '#aa5500',
+    44: '#0000aa', 45: '#aa00aa', 46: '#00aaaa', 47: '#aaaaaa',
+}
+
+# bright background colors 100-107
+_ANSI_BRIGHT_BG_MAP = {
+    100: '#555555', 101: '#ff5555', 102: '#55ff55', 103: '#ffff55',
+    104: '#5555ff', 105: '#ff55ff', 106: '#55ffff', 107: '#ffffff',
 }
 
 
@@ -76,6 +93,16 @@ def _ansi_to_html(text: str) -> str:
 					if color:
 						out.append(f'<span style="color:{color}">')
 						span_stack.append('c')
+				elif 40 <= code <= 47:
+					bgcolor = _ANSI_BG_COLOR_MAP.get(code, None)
+					if bgcolor:
+						out.append(f'<span style="background-color:{bgcolor}">')
+						span_stack.append('bg')
+				elif 100 <= code <= 107:
+					bgcolor = _ANSI_BRIGHT_BG_MAP.get(code, None)
+					if bgcolor:
+						out.append(f'<span style="background-color:{bgcolor}">')
+						span_stack.append('bg')
 				else:
 					# unsupported code: ignore
 					pass
@@ -141,7 +168,6 @@ class LogTeeHTML:
 	"""
 
 	def __init__(self, log_name: str, suffix: Optional[str] = None, path_prefix: Optional[str] = None, logfile_prefix: Optional[str] = None, template: str = 'pretty.html'):
-		self.log_name = _slugify(log_name)
 		if suffix is None:
 			suffix = datetime.now().strftime("_%Y%m%d_%H%M")
 		self.suffix = suffix
@@ -151,12 +177,21 @@ class LogTeeHTML:
 		template_path = os.path.join(template_dir, template)
 		with open(template_path, "r", encoding="utf-8") as f:
 			self.template = f.read()
-		self.template.replace("{title}", self.log_name)
-		self.filepath = f"{self.log_name}{self.suffix}.html"
+		self.template.replace("{title}", log_name)
+		self.filepath = f"{log_name}{self.suffix}.html"
 		self._fh = None
 		self._last_chunk_type = None
 		self._last_chunk_base: Optional[str] = None
 		self._marker_pos_cache: Optional[int] = None
+		
+		# ANSI state tracking for color persistence
+		self._ansi_state = {
+			'bold': False,
+			'dim': False, 
+			'underline': False,
+			'fg_color': None,
+			'bg_color': None
+		}
 
 	def __enter__(self):
 		dirname = os.path.dirname(self.filepath)
@@ -228,10 +263,114 @@ class LogTeeHTML:
 		os.fsync(self._fh.fileno())
 		fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
 
+	def _ansi_to_html_stateful(self, text: str) -> str:
+		"""Convert ANSI to HTML while maintaining state across calls"""
+		parts = re.split(r'(\x1b\[[0-9;]*m)', text)
+		out = []
+		
+		# Start with current state if any colors are active
+		if self._ansi_state['fg_color'] or self._ansi_state['bg_color'] or self._ansi_state['bold'] or self._ansi_state['dim'] or self._ansi_state['underline']:
+			styles = []
+			if self._ansi_state['bold']:
+				styles.append('font-weight:700')
+			if self._ansi_state['dim']:
+				styles.append('opacity:0.7')
+			if self._ansi_state['underline']:
+				styles.append('text-decoration:underline')
+			if self._ansi_state['fg_color']:
+				styles.append(f'color:{self._ansi_state["fg_color"]}')
+			if self._ansi_state['bg_color']:
+				styles.append(f'background-color:{self._ansi_state["bg_color"]}')
+			if styles:
+				out.append(f'<span style="{";".join(styles)}">')
+		
+		span_open = bool(self._ansi_state['fg_color'] or self._ansi_state['bg_color'] or self._ansi_state['bold'] or self._ansi_state['dim'] or self._ansi_state['underline'])
+		
+		for p in parts:
+			if not p:
+				continue
+			m = re.match(r'\x1b\[([0-9;]*)m', p)
+			if m:
+				codes = [int(x) for x in m.group(1).split(';') if x]
+				if not codes:
+					codes = [0]
+				
+				for code in codes:
+					if code == 0:
+						# reset all
+						if span_open:
+							out.append('</span>')
+							span_open = False
+						self._ansi_state = {
+							'bold': False,
+							'dim': False,
+							'underline': False, 
+							'fg_color': None,
+							'bg_color': None
+						}
+					elif code == 1:
+						self._ansi_state['bold'] = True
+					elif code == 2:
+						self._ansi_state['dim'] = True
+					elif code == 4:
+						self._ansi_state['underline'] = True
+					elif 30 <= code <= 37:
+						self._ansi_state['fg_color'] = _ANSI_COLOR_MAP.get(code)
+					elif 90 <= code <= 97:
+						self._ansi_state['fg_color'] = _ANSI_BRIGHT_MAP.get(code)
+					elif 40 <= code <= 47:
+						self._ansi_state['bg_color'] = _ANSI_BG_COLOR_MAP.get(code)
+					elif 100 <= code <= 107:
+						self._ansi_state['bg_color'] = _ANSI_BRIGHT_BG_MAP.get(code)
+				
+				# Close old span and open new one with updated styles
+				if span_open:
+					out.append('</span>')
+				
+				# Build new span with current state
+				styles = []
+				if self._ansi_state['bold']:
+					styles.append('font-weight:700')
+				if self._ansi_state['dim']:
+					styles.append('opacity:0.7')
+				if self._ansi_state['underline']:
+					styles.append('text-decoration:underline')
+				if self._ansi_state['fg_color']:
+					styles.append(f'color:{self._ansi_state["fg_color"]}')
+				if self._ansi_state['bg_color']:
+					styles.append(f'background-color:{self._ansi_state["bg_color"]}')
+				
+				if styles:
+					out.append(f'<span style="{";".join(styles)}">')
+					span_open = True
+				else:
+					span_open = False
+			else:
+				out.append(_escape_html(p))
+		
+		# Don't close the span here - leave it open for state persistence
+		return ''.join(out)
+
+	def _close_ansi_spans(self) -> str:
+		"""Close any open ANSI spans and reset state"""
+		if self._ansi_state['fg_color'] or self._ansi_state['bg_color'] or self._ansi_state['bold'] or self._ansi_state['dim'] or self._ansi_state['underline']:
+			self._ansi_state = {
+				'bold': False,
+				'dim': False,
+				'underline': False,
+				'fg_color': None,
+				'bg_color': None
+			}
+			return '</span>'
+		return ''
+
 	# --- public API ---
 	def start(self, section_name: str):
-		# close any open mergeable chunk
+		# close any open mergeable chunk and ANSI spans
 		self._last_chunk_type = None
+		close_span = self._close_ansi_spans()
+		if close_span:
+			self._insert_bytes(close_span.encode('utf8'))
 		sid = _slugify(section_name)
 		h = f'<h1 id="{sid}">{section_name}</h1>\n'
 		self._insert_bytes(h.encode('utf8'))
@@ -343,41 +482,60 @@ class LogTeeHTML:
 		# detect cursor/control sequences conservatively
 		# Treat SGR ('m') as styling (keep in stdout/stderr). Only mark as ansi-cursor
 		# when we see control sequences whose final byte is not 'm' (cursor movement, clear line, etc.)
+		has_ansi = False
+		only_m = True
 		if '\x1b[' in text:
 			seqs = re.findall(r'\x1b\[[0-9;]*[A-Za-z]', text)
 			for s in seqs:
+				has_ansi = True
 				final = s[-1]
 				if final != 'm':
-					chunk_type = 'ansi-cursor'
-					break
+					only_m = False
+			if not only_m:
+				chunk_type = 'ansi-cursor'
+
+		# If we're already in ansi-cursor mode, stay in it until we can exit
+		if self._last_chunk_type == 'ansi-cursor':
+			chunk_type = 'ansi-cursor'
+
+		# If previous chunk was 'ansi-cursor', only exit when we get a complete line (ending with \n) with no complex ANSI or control chars
+		has_control_chars = '\r' in text or '\b' in text
+		if (self._last_chunk_type == 'ansi-cursor' and 
+		    text.endswith('\n') and 
+		    (not has_ansi or only_m) and
+		    not has_control_chars):
+			self._last_chunk_type = None
+			self._last_chunk_base = None
+			chunk_type = 'stdout'  # Reset to stdout after exiting ansi-cursor
 
 		# convert ANSI to HTML where possible, otherwise escape
 		if '\x1b[' in text:
-			escaped = _ansi_to_html(text)
+			if chunk_type == 'ansi-cursor':
+				# For ansi-cursor chunks, strip out cursor movement sequences but keep SGR (color/font)
+				# Remove non-SGR sequences (cursor movement, clear line, etc.)
+				stripped = re.sub(r'\x1b\[[0-9;]*[A-Za-z](?<!m)', '', text)
+				escaped = self._ansi_to_html_stateful(stripped)
+			else:
+				escaped = self._ansi_to_html_stateful(text)
 		else:
 			escaped = _escape_html(text)
 
 		# Decide merge vs new chunk
-		# treat ansi-cursor as part of the base stream for merging
-		base = 'stderr' if chunk_type == 'stderr' else 'stdout'
 		mergeable = chunk_type in ('stdout', 'stderr', 'ansi-cursor')
-		if '\r' in text and mergeable and self._last_chunk_base == base:
-			# handle carriage return semantics
+		if '\r' in text and mergeable and self._last_chunk_base == chunk_type:
 			self._apply_carriage_return(text, chunk_type)
 			return
-		if mergeable and self._last_chunk_base == base:
-			# merge: insert inner content before the previous chunk's closing tag
+		if mergeable and self._last_chunk_base == chunk_type:
 			inner = escaped
 			self._insert_before_closer(inner.encode('utf8'))
 		else:
-			# new chunk: full wrapper
 			wrapper = f'<div class="{chunk_type}"><pre>{escaped}</pre></div>\n'
 			self._insert_bytes(wrapper.encode('utf8'))
 			self._last_chunk_type = chunk_type if mergeable else None
-			self._last_chunk_base = base if mergeable else None
+			self._last_chunk_base = chunk_type if mergeable else None
 
 	def inject_html(self, html_content: str, anchor_text: Optional[str], anchor_name: Optional[str] = None):
-		# inject standalone HTML fragment (no merging)
+		# inject HTML fragment wrapped in a collapsible chunk
 		# Ensure we don't merge this injection into any open stdout/stderr chunk
 		self._last_chunk_type = None
 		self._last_chunk_base = None
@@ -385,7 +543,10 @@ class LogTeeHTML:
 			if anchor_name is None:
 				anchor_name = f"{_slugify(anchor_text)}-{uuid.uuid4().hex[:6]}"
 			self.anchor(anchor_text, anchor_name)
-		self._insert_bytes(html_content.encode('utf8'))
+		
+		# Wrap HTML content in a collapsible chunk
+		wrapper = f'<div class="html-injection"><pre>{html_content}</pre></div>\n'
+		self._insert_bytes(wrapper.encode('utf8'))
 		# ensure marker cache is updated after the explicit insert
 		self._marker_pos_cache = self._find_marker()
 
