@@ -324,7 +324,7 @@ class LogTeeHTML:
 		# Print clickable file:// link to terminal (no redirection)
 		path = os.path.abspath(self.filepath)
 		if self.logfile_prefix:
-			link_path = os.path.join(self.logfile_prefix, os.path.basename(self.filepath))
+			link_path = os.path.join(self.logfile_prefix, self.filepath)
 		else:
 			link_path = path
 		# write directly to the real stdout to avoid re-capture by the proxy
@@ -366,58 +366,73 @@ class LogTeeHTML:
 
 	def _apply_carriage_return(self, text: str, chunk_type: str):
 		# Apply simple carriage return semantics by replacing the last line of the last chunk
-		# determine base stream for CR handling
-		base = 'stderr' if chunk_type == 'stderr' else 'stdout'
-		last_start = self._find_last_chunk_start(base)
-		if last_start is None:
-			# fallback: append as new chunk
-			self._insert_bytes(f'<div class="{chunk_type}"><pre>{_escape_html(_strip_ansi(text))}</pre></div>\n'.encode('utf8'))
-			return
-		marker_pos = self._find_marker()
-		footer_tail = self._read_footer_tail(marker_pos)
-
-		# read existing chunk content
-		self._fh.seek(last_start)
-		chunk_bytes = self._fh.read(marker_pos - last_start)
-		# Defensive: tolerate invalid utf-8 bytes to avoid crashing when reading file fragments.
-		# Replace invalid sequences so the HTML remains valid and processing can continue.
-		chunk_text = chunk_bytes.decode('utf8', errors='replace')
-
-		# extract pre content
-		m = re.search(r'<pre>(.*?)</pre>', chunk_text, flags=re.DOTALL)
-		if not m:
-			# cannot parse, fallback to details
-			details = _escape_html(text)
-			det = f'<details><summary>ANSI cursor</summary><pre>{details}</pre></details>\n'
-			self._insert_bytes(det.encode('utf8'))
-			return
-
-		pre_content = m.group(1)
-		# determine replacement text (take last segment after last \r)
-		new_segment = text.split('\r')[-1]
-		new_segment = _escape_html(_strip_ansi(new_segment))
-		# replace last line in pre_content
-		lines = pre_content.split('\n')
-		if lines:
-			lines[-1] = new_segment
-		new_pre = '\n'.join(lines)
-		new_chunk_text = chunk_text[:m.start(1)] + new_pre + chunk_text[m.end(1):]
-
-		# write head up to last_start, then new_chunk_text, then marker + footer_tail
-		head_pos = last_start
-		# Protect the actual file write with the instance lock and flock
+		# Protect entire read-modify-write operation to prevent race conditions
 		with self._file_lock:
+			# determine base stream for CR handling
+			base = 'stderr' if chunk_type == 'stderr' else 'stdout'
+			last_start = self._find_last_chunk_start(base)
+			if last_start is None:
+				# fallback: append as new chunk
+				fallback_bytes = f'<div class="{chunk_type}"><pre>{_escape_html(_strip_ansi(text))}</pre></div>\n'.encode('utf8')
+				self._marker_pos_cache = None
+				marker_pos = self._find_marker()
+				footer_tail = self._read_footer_tail(marker_pos)
+				new_bytes = fallback_bytes + _FOOTER_MARKER.encode('utf8') + footer_tail
+				self._rewrite_at(marker_pos, new_bytes)
+				self._marker_pos_cache = marker_pos + len(fallback_bytes)
+				return
+			marker_pos = self._find_marker()
+			footer_tail = self._read_footer_tail(marker_pos)
+
+			# read existing chunk content
+			self._fh.seek(last_start)
+			chunk_bytes = self._fh.read(marker_pos - last_start)
+			# Defensive: tolerate invalid utf-8 bytes to avoid crashing when reading file fragments.
+			# Replace invalid sequences so the HTML remains valid and processing can continue.
+			chunk_text = chunk_bytes.decode('utf8', errors='replace')
+
+			# extract pre content
+			m = re.search(r'<pre>(.*?)</pre>', chunk_text, flags=re.DOTALL)
+			if not m:
+				# cannot parse, fallback to details
+				details = _escape_html(text)
+				det = f'<details><summary>ANSI cursor</summary><pre>{details}</pre></details>\n'
+				det_bytes = det.encode('utf8')
+				self._marker_pos_cache = None
+				marker_pos = self._find_marker()
+				footer_tail = self._read_footer_tail(marker_pos)
+				new_bytes = det_bytes + _FOOTER_MARKER.encode('utf8') + footer_tail
+				self._rewrite_at(marker_pos, new_bytes)
+				self._marker_pos_cache = marker_pos + len(det_bytes)
+				return
+
+			pre_content = m.group(1)
+			# determine replacement text (take last segment after last \r)
+			new_segment = text.split('\r')[-1]
+			new_segment = _escape_html(_strip_ansi(new_segment))
+			# replace last line in pre_content
+			lines = pre_content.split('\n')
+			if lines:
+				lines[-1] = new_segment
+			new_pre = '\n'.join(lines)
+			new_chunk_text = chunk_text[:m.start(1)] + new_pre + chunk_text[m.end(1):]
+
+			# write head up to last_start, then new_chunk_text, then marker + footer_tail
+			head_pos = last_start
+			# Use the existing file lock protection with flock
 			fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-			self._fh.seek(head_pos)
-			self._fh.write(new_chunk_text.encode('utf8'))
-			self._fh.write(_FOOTER_MARKER.encode('utf8'))
-			self._fh.write(footer_tail)
-			self._fh.truncate()
-			self._fh.flush()
-			os.fsync(self._fh.fileno())
-			fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
-		# refresh marker cache after modifying the file
-		self._marker_pos_cache = self._find_marker()
+			try:
+				self._fh.seek(head_pos)
+				self._fh.write(new_chunk_text.encode('utf8'))
+				self._fh.write(_FOOTER_MARKER.encode('utf8'))
+				self._fh.write(footer_tail)
+				self._fh.truncate()
+				self._fh.flush()
+				os.fsync(self._fh.fileno())
+			finally:
+				fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+			# refresh marker cache after modifying the file
+			self._marker_pos_cache = self._find_marker()
 
 	def print(self, data, chunk_type: str = 'stdout'):
 		text = data if isinstance(data, str) else str(data)
@@ -489,8 +504,8 @@ class LogTeeHTML:
 				anchor_name = f"{_slugify(anchor_text)}-{uuid.uuid4().hex[:6]}"
 			self.anchor(anchor_text, anchor_name)
 		
-		# Wrap HTML content in a collapsible chunk
-		wrapper = f'<div class="html-injection"><pre>{html_content}</pre></div>\n'
+		# Wrap HTML content in a chunk without pre tags
+		wrapper = f'<div class="html-injection">{html_content}</div>\n'
 		self._insert_bytes(wrapper.encode('utf8'))
 		# ensure marker cache is updated after the explicit insert
 		self._marker_pos_cache = self._find_marker()
@@ -539,31 +554,38 @@ class LogTeeHTML:
 
 	def _insert_bytes(self, b: bytes):
 		# Insert b just before the footer marker
-		# Force fresh marker lookup, then write the bytes and update the cached marker position.
-		self._marker_pos_cache = None
-		marker_pos = self._find_marker()
-		footer_tail = self._read_footer_tail(marker_pos)
-		new_bytes = b + _FOOTER_MARKER.encode('utf8') + footer_tail
-		# Protect rewrite with instance-level lock and refresh marker cache afterwards
+		# Protect entire read-modify-write operation to prevent race conditions
 		with self._file_lock:
+			# Force fresh marker lookup, then write the bytes and update the cached marker position.
+			self._marker_pos_cache = None
+			marker_pos = self._find_marker()
+			footer_tail = self._read_footer_tail(marker_pos)
+			new_bytes = b + _FOOTER_MARKER.encode('utf8') + footer_tail
 			self._rewrite_at(marker_pos, new_bytes)
-		# After inserting `b` the footer marker moves forward by len(b) bytes.
-		self._marker_pos_cache = marker_pos + len(b)
+			# After inserting `b` the footer marker moves forward by len(b) bytes.
+			self._marker_pos_cache = marker_pos + len(b)
 
 	def _insert_before_closer(self, inner: bytes):
 		# Insert inner before the last chunk closing tag that occurs before the footer marker.
-		marker_pos = self._find_marker()
-		closer = _CHUNK_CLOSER.encode('utf8')
-		pos_closer = self._find_pos_of_last(closer, before_pos=marker_pos)
-		if pos_closer is None:
-			# fallback to simple insert
-			return self._insert_bytes(inner)
-		footer_tail = self._read_footer_tail(marker_pos)
-		# write: keep file up to pos_closer, then inner + closer + marker + footer_tail
-		new_tail = inner + closer + _FOOTER_MARKER.encode('utf8') + footer_tail
-		# perform rewrite starting at pos_closer (preserves head)
+		# Protect entire read-modify-write operation to prevent race conditions
 		with self._file_lock:
+			marker_pos = self._find_marker()
+			closer = _CHUNK_CLOSER.encode('utf8')
+			pos_closer = self._find_pos_of_last(closer, before_pos=marker_pos)
+			if pos_closer is None:
+				# fallback to simple insert - need to call unlocked version to avoid deadlock
+				self._marker_pos_cache = None
+				marker_pos = self._find_marker()
+				footer_tail = self._read_footer_tail(marker_pos)
+				new_bytes = inner + _FOOTER_MARKER.encode('utf8') + footer_tail
+				self._rewrite_at(marker_pos, new_bytes)
+				self._marker_pos_cache = marker_pos + len(inner)
+				return
+			footer_tail = self._read_footer_tail(marker_pos)
+			# write: keep file up to pos_closer, then inner + closer + marker + footer_tail
+			new_tail = inner + closer + _FOOTER_MARKER.encode('utf8') + footer_tail
+			# perform rewrite starting at pos_closer (preserves head)
 			self._rewrite_at(pos_closer, new_tail)
-		# refresh cached marker position after rewrite
-		self._marker_pos_cache = self._find_marker()
+			# refresh cached marker position after rewrite
+			self._marker_pos_cache = self._find_marker()
 

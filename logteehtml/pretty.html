@@ -132,15 +132,42 @@
 			if(t.matches('.chunk .label .open')){
 				var chunk = t.closest('.chunk');
 				if(!chunk) return;
-				var pre = chunk.querySelector('pre');
-				if(!pre) return;
-				var w = window.open('about:blank','_blank');
+				
+				var content = '';
+				var isHtmlChunk = chunk.classList.contains('html-injection');
+				
+				if(isHtmlChunk) {
+					// For HTML chunks, get all content except the label
+					var clonedChunk = chunk.cloneNode(true);
+					var label = clonedChunk.querySelector('.label');
+					if(label) label.remove();
+					content = clonedChunk.innerHTML;
+				} else {
+					// For other chunks, look for pre element
+					var pre = chunk.querySelector('pre');
+					if(!pre) return;
+					content = pre.innerHTML;
+				}
+				
+				var w = window.open('','_blank');
+				if(!w) {
+					alert('Popup blocked. Please allow popups for this site.');
+					return;
+				}
+				
 				try{
 					w.document.open();
-					w.document.write(pre.innerHTML);
+					if(isHtmlChunk) {
+						// Write proper HTML document for HTML chunks
+						w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>HTML Content</title></head><body>' + content + '</body></html>');
+					} else {
+						// Write as plain text for other chunks
+						w.document.write('<pre style="font-family: monospace; white-space: pre-wrap;">' + content + '</pre>');
+					}
 					w.document.close();
 				}catch(err){
-					w.document.body.textContent = pre.textContent;
+					// Fallback: use document.body for plain text
+					w.document.body.innerHTML = '<pre style="font-family: monospace; white-space: pre-wrap;">' + (content || 'Error loading content') + '</pre>';
 				}
 			}
 		});
