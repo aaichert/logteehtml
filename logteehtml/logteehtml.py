@@ -8,7 +8,9 @@ import base64
 from datetime import datetime
 from typing import Optional
 import fcntl
+import threading
 from PIL import Image
+import rich
 
 _FOOTER_MARKER = "<!-- LOGTEEHTML_FOOTER -->"
 _CHUNK_CLOSER = "</pre></div>\n"
@@ -25,95 +27,16 @@ def _strip_ansi(text: str) -> str:
 	# Minimal ANSI escape removal. For complex SGR->HTML mapping a dedicated parser would be better.
 	return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
 
-def _is_ansi_color_or_font(seq: bytes) -> bool:
-	"""Returns True if the ANSI sequence is a color/font SGR (ESC [ ... m)."""
-	# ESC [ ... m (SGR)
-	return bool(re.search(rb'\x1b\[[0-9;]*m', seq))
-
-
 _ANSI_COLOR_MAP = {
 	30: '#000000', 31: '#aa0000', 32: '#00aa00', 33: '#aa5500',
 	34: '#0000aa', 35: '#aa00aa', 36: '#00aaaa', 37: '#aaaaaa',
-}
-
-# bright colors 90-97
-_ANSI_BRIGHT_MAP = {
     90: '#555555', 91: '#ff5555', 92: '#55ff55', 93: '#ffff55',
     94: '#5555ff', 95: '#ff55ff', 96: '#55ffff', 97: '#ffffff',
-}
-
-# background colors 40-47
-_ANSI_BG_COLOR_MAP = {
     40: '#000000', 41: '#aa0000', 42: '#00aa00', 43: '#aa5500',
     44: '#0000aa', 45: '#aa00aa', 46: '#00aaaa', 47: '#aaaaaa',
-}
-
-# bright background colors 100-107
-_ANSI_BRIGHT_BG_MAP = {
     100: '#555555', 101: '#ff5555', 102: '#55ff55', 103: '#ffff55',
     104: '#5555ff', 105: '#ff55ff', 106: '#55ffff', 107: '#ffffff',
 }
-
-
-def _ansi_to_html(text: str) -> str:
-	# Simple SGR parser: supports reset(0), bold(1), dim(2), underline(4), fg color 30-37
-	parts = re.split(r'(\x1b\[[0-9;]*m)', text)
-	out = []
-	span_stack = []
-	for p in parts:
-		if not p:
-			continue
-		m = re.match(r'\x1b\[([0-9;]*)m', p)
-		if m:
-			codes = [int(x) for x in m.group(1).split(';') if x]
-			if not codes:
-				codes = [0]
-			for code in codes:
-				if code == 0:
-					# reset
-					while span_stack:
-						out.append('</span>')
-						span_stack.pop()
-				elif code == 1:
-					out.append('<span style="font-weight:700">')
-					span_stack.append('b')
-				elif code == 2:
-					out.append('<span style="opacity:0.7">')
-					span_stack.append('dim')
-				elif code == 4:
-					out.append('<span style="text-decoration:underline">')
-					span_stack.append('u')
-				elif 30 <= code <= 37:
-					color = _ANSI_COLOR_MAP.get(code, None)
-					if color:
-						out.append(f'<span style="color:{color}">')
-						span_stack.append('c')
-				elif 90 <= code <= 97:
-					color = _ANSI_BRIGHT_MAP.get(code, None)
-					if color:
-						out.append(f'<span style="color:{color}">')
-						span_stack.append('c')
-				elif 40 <= code <= 47:
-					bgcolor = _ANSI_BG_COLOR_MAP.get(code, None)
-					if bgcolor:
-						out.append(f'<span style="background-color:{bgcolor}">')
-						span_stack.append('bg')
-				elif 100 <= code <= 107:
-					bgcolor = _ANSI_BRIGHT_BG_MAP.get(code, None)
-					if bgcolor:
-						out.append(f'<span style="background-color:{bgcolor}">')
-						span_stack.append('bg')
-				else:
-					# unsupported code: ignore
-					pass
-		else:
-			out.append(_escape_html(p))
-	# close any remaining spans
-	while span_stack:
-		out.append('</span>')
-		span_stack.pop()
-	return ''.join(out)
-
 
 def _escape_html(text: str) -> str:
 	return (
@@ -124,11 +47,6 @@ def _escape_html(text: str) -> str:
 
 class _StreamProxy:
 	"""Proxy for sys.stdout/sys.stderr that writes to the terminal and also forwards to LogTeeHTML."""
-	def __init__(self, logger, chunk_type: str, orig):
-		self._logger = logger
-		self._chunk_type = chunk_type
-		self._orig = orig
-
 	def __init__(self, logger, chunk_type: str, orig):
 		self._logger = logger
 		self._chunk_type = chunk_type
@@ -177,7 +95,8 @@ class LogTeeHTML:
 		template_path = os.path.join(template_dir, template)
 		with open(template_path, "r", encoding="utf-8") as f:
 			self.template = f.read()
-		self.template.replace("{title}", log_name)
+		# apply title placeholder into the template (assign result)
+		self.template = self.template.replace("{title}", log_name)
 		self.filepath = f"{log_name}{self.suffix}.html"
 		self._fh = None
 		self._last_chunk_type = None
@@ -193,6 +112,10 @@ class LogTeeHTML:
 			'bg_color': None
 		}
 
+		# Per-instance re-entrant lock for thread-safety around actual file writes
+		# Use RLock so the same thread can re-enter if needed.
+		self._file_lock = threading.RLock()
+
 	def __enter__(self):
 		dirname = os.path.dirname(self.filepath)
 		if dirname:
@@ -200,6 +123,7 @@ class LogTeeHTML:
 		with open(self.filepath, 'wb') as f:
 			f.write(self.template.encode('utf8'))
 		self._fh = open(self.filepath, 'r+b')
+		os.set_inheritable(self._fh.fileno(), False)
 		if _FOOTER_MARKER.encode('utf8') not in self._fh.read():
 			raise RuntimeError('Footer marker missing in template')
 		self._fh.seek(0, io.SEEK_SET)
@@ -253,15 +177,17 @@ class LogTeeHTML:
 		return self._fh.read()
 
 	def _rewrite_at(self, pos: int, new_bytes: bytes):
-		# Overwrite starting at pos with new_bytes and then truncate remainder
-		# Use flock to avoid concurrent writers corrupting the file
+		# Overwrite starting at pos with new_bytes and then truncate remainder.
+		# Acquire an advisory flock for the write and ensure it is always released.
 		fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-		self._fh.seek(pos)
-		self._fh.write(new_bytes)
-		self._fh.truncate()
-		self._fh.flush()
-		os.fsync(self._fh.fileno())
-		fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+		try:
+			self._fh.seek(pos)
+			self._fh.write(new_bytes)
+			self._fh.truncate()
+			self._fh.flush()
+			os.fsync(self._fh.fileno())
+		finally:
+			fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
 
 	def _ansi_to_html_stateful(self, text: str) -> str:
 		"""Convert ANSI to HTML while maintaining state across calls"""
@@ -317,11 +243,11 @@ class LogTeeHTML:
 					elif 30 <= code <= 37:
 						self._ansi_state['fg_color'] = _ANSI_COLOR_MAP.get(code)
 					elif 90 <= code <= 97:
-						self._ansi_state['fg_color'] = _ANSI_BRIGHT_MAP.get(code)
+						self._ansi_state['fg_color'] = _ANSI_COLOR_MAP.get(code)
 					elif 40 <= code <= 47:
-						self._ansi_state['bg_color'] = _ANSI_BG_COLOR_MAP.get(code)
+						self._ansi_state['bg_color'] = _ANSI_COLOR_MAP.get(code)
 					elif 100 <= code <= 107:
-						self._ansi_state['bg_color'] = _ANSI_BRIGHT_BG_MAP.get(code)
+						self._ansi_state['bg_color'] = _ANSI_COLOR_MAP.get(code)
 				
 				# Close old span and open new one with updated styles
 				if span_open:
@@ -378,14 +304,22 @@ class LogTeeHTML:
 		self._current_section_id = sid
 
 	def anchor(self, anchor_text: str, anchor_name: Optional[str] = None):
+		# close any open mergeable chunk and ANSI spans
 		self._last_chunk_type = None
+		self._last_chunk_base = None
+		close_span = self._close_ansi_spans()
+		if close_span:
+			self._insert_bytes(close_span.encode('utf8'))
 		if anchor_name is None:
 			base = _slugify(anchor_text)
 			anchor_name = f"{base}-{uuid.uuid4().hex[:6]}"
-		h = f'<h2 id="{anchor_name}" data-section="{anchor_name}">{anchor_text}</h2>\n'
-		# ensure the anchor points to the current section (if any)
+		# attach timestamp metadata and render a small timestamp next to the anchor text
+		ts = datetime.now().isoformat()
 		data_section = getattr(self, '_current_section_id', anchor_name) or anchor_name
-		h = f'<h2 id="{anchor_name}" data-section="{data_section}">{anchor_text}</h2>\n'
+		h = (
+			f'<h2 id="{anchor_name}" data-section="{data_section}" '
+			f'data-timestamp="{ts}" title="{ts}">{_escape_html(anchor_text)}</h2>\n'
+		)
 		self._insert_bytes(h.encode('utf8'))
 		# Print clickable file:// link to terminal (no redirection)
 		path = os.path.abspath(self.filepath)
@@ -396,11 +330,13 @@ class LogTeeHTML:
 		# write directly to the real stdout to avoid re-capture by the proxy
 		real = getattr(sys, '__stdout__', None)
 		if real and hasattr(real, 'fileno'):
+			os.write(real.fileno(), "\n".encode('utf8'))
 			os.write(real.fileno(), f"[🔗{anchor_text}](file://{link_path}#{anchor_name})\n".encode('utf8'))
 		else:
 			if hasattr(self, '_orig_stdout') and self._orig_stdout:
 				self._orig_stdout.write(f"[🔗{anchor_text}](file://{link_path}#{anchor_name})\n")
 				self._orig_stdout.flush()
+
 
 	def _find_last_chunk_start(self, chunk_type: str) -> Optional[int]:
 		# Search backwards in file tail for last <div class="{chunk_type}" occurrence
@@ -443,7 +379,9 @@ class LogTeeHTML:
 		# read existing chunk content
 		self._fh.seek(last_start)
 		chunk_bytes = self._fh.read(marker_pos - last_start)
-		chunk_text = chunk_bytes.decode('utf8')
+		# Defensive: tolerate invalid utf-8 bytes to avoid crashing when reading file fragments.
+		# Replace invalid sequences so the HTML remains valid and processing can continue.
+		chunk_text = chunk_bytes.decode('utf8', errors='replace')
 
 		# extract pre content
 		m = re.search(r'<pre>(.*?)</pre>', chunk_text, flags=re.DOTALL)
@@ -467,15 +405,19 @@ class LogTeeHTML:
 
 		# write head up to last_start, then new_chunk_text, then marker + footer_tail
 		head_pos = last_start
-		fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-		self._fh.seek(head_pos)
-		self._fh.write(new_chunk_text.encode('utf8'))
-		self._fh.write(_FOOTER_MARKER.encode('utf8'))
-		self._fh.write(footer_tail)
-		self._fh.truncate()
-		self._fh.flush()
-		os.fsync(self._fh.fileno())
-		fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+		# Protect the actual file write with the instance lock and flock
+		with self._file_lock:
+			fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+			self._fh.seek(head_pos)
+			self._fh.write(new_chunk_text.encode('utf8'))
+			self._fh.write(_FOOTER_MARKER.encode('utf8'))
+			self._fh.write(footer_tail)
+			self._fh.truncate()
+			self._fh.flush()
+			os.fsync(self._fh.fileno())
+			fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+		# refresh marker cache after modifying the file
+		self._marker_pos_cache = self._find_marker()
 
 	def print(self, data, chunk_type: str = 'stdout'):
 		text = data if isinstance(data, str) else str(data)
@@ -534,12 +476,15 @@ class LogTeeHTML:
 			self._last_chunk_type = chunk_type if mergeable else None
 			self._last_chunk_base = chunk_type if mergeable else None
 
-	def inject_html(self, html_content: str, anchor_text: Optional[str], anchor_name: Optional[str] = None):
+	def inject_html(self, html_content: str, anchor_text: Optional[str] = None, anchor_name: Optional[str] = None):
 		# inject HTML fragment wrapped in a collapsible chunk
-		# Ensure we don't merge this injection into any open stdout/stderr chunk
+		# Ensure we don't merge this injection into any open stdout/stderr chunk and close ANSI spans
 		self._last_chunk_type = None
 		self._last_chunk_base = None
-		if anchor_text:
+		close_span = self._close_ansi_spans()
+		if close_span:
+			self._insert_bytes(close_span.encode('utf8'))
+		if anchor_text is not None:
 			if anchor_name is None:
 				anchor_name = f"{_slugify(anchor_text)}-{uuid.uuid4().hex[:6]}"
 			self.anchor(anchor_text, anchor_name)
@@ -573,14 +518,14 @@ class LogTeeHTML:
 		html = '<table border="1"><thead><tr>' + ''.join(f'<th>{_escape_html(k)}</th>' for k in keys) + '</tr></thead><tbody>' + '\n'.join(rows) + '</tbody></table>\n'
 		self.inject_html(html, anchor_text)
 		if text_preview:
-			# print preview to the real stdout to avoid capture by the proxy
-			real = getattr(sys, '__stdout__', None) or getattr(self, '_orig_stdout', None)
-			if real and hasattr(real, 'write'):
-				real.write(f"Table: {anchor_text}\n")
-				if hasattr(real, 'flush'):
-					real.flush()
-			else:
-				print(f"Table: {anchor_text}")
+			console = rich.console.Console(file=sys.__stdout__)
+			rich_table = rich.table.Table(show_header=True, header_style="bold")
+			for k in keys:
+				rich_table.add_column(str(k))
+			for row in table_data:
+				rich_table.add_row(*[str(row.get(k, "")) for k in keys])
+			console.print(f"Table: {anchor_text}")
+			console.print(rich_table)
 
 	def inject_json(self, data: dict, anchor_text: str, line_numbers: bool = False):
 		txt = json.dumps(data, indent=2)
@@ -599,7 +544,9 @@ class LogTeeHTML:
 		marker_pos = self._find_marker()
 		footer_tail = self._read_footer_tail(marker_pos)
 		new_bytes = b + _FOOTER_MARKER.encode('utf8') + footer_tail
-		self._rewrite_at(marker_pos, new_bytes)
+		# Protect rewrite with instance-level lock and refresh marker cache afterwards
+		with self._file_lock:
+			self._rewrite_at(marker_pos, new_bytes)
 		# After inserting `b` the footer marker moves forward by len(b) bytes.
 		self._marker_pos_cache = marker_pos + len(b)
 
@@ -615,5 +562,8 @@ class LogTeeHTML:
 		# write: keep file up to pos_closer, then inner + closer + marker + footer_tail
 		new_tail = inner + closer + _FOOTER_MARKER.encode('utf8') + footer_tail
 		# perform rewrite starting at pos_closer (preserves head)
-		self._rewrite_at(pos_closer, new_tail)
+		with self._file_lock:
+			self._rewrite_at(pos_closer, new_tail)
+		# refresh cached marker position after rewrite
+		self._marker_pos_cache = self._find_marker()
 

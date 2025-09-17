@@ -5,11 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{title}</title>
   <style>
-	body { background:#0b0f14;color:#c9d1d9;font-family: monospace; margin:0; padding:0; }
-	.log { padding:1rem; max-width:1200px; margin-left:260px; }
-	.stdout pre, .stderr pre { white-space:pre-wrap; margin:0; font-family:inherit; }
-	.stderr pre { color: #ff7b72 }
-	.toc { position:fixed; left:0; top:0; bottom:0; width:240px; overflow:auto; background:#061118; padding:1rem; border-right:1px solid #0f1720 }
+ 	body { background:#252525;color:#c9d1d9;font-family: monospace; margin:0; padding:0; }
+	a {color:#8cc5ff;}
+ 	.log { padding:0.5rem; max-width:1200px; margin-left:140px; transition: margin-left .22s ease; }
+ 	.stdout pre, .stderr pre { white-space:pre-wrap; margin:0; font-family:inherit; }
+ 	.stderr pre { color: #ff7b72 }
+ 	.toc { position:fixed; left:0; top:0; bottom:0; width:120px; overflow:auto; background:linear-gradient(90deg,#212529,#21303a); padding:5rem 0.5rem 0.8rem 0.5rem; border-right:1px solid #0f1720; box-shadow: 2px 0 6px rgba(0,0,0,0.4); transform: translateX(0); transition: transform .22s ease; }
+ 	.toc.closed { transform: translateX(-100%); }
+ 	.toggle-btn { position:fixed; left:8px; top:16px; z-index:1; background:#0f1720; color:#c9d1d9; border:1px solid #223; padding:6px 8px; cursor:pointer; border-radius:4px; }
   </style>
   <script>
 	function buildTOC() {
@@ -34,7 +37,11 @@
 		  l.style.paddingLeft = '8px';
 		  const ael = document.createElement('a');
 		  ael.href = '#'+a.id;
-		  ael.textContent = a.textContent;
+		  const clone = a.cloneNode(true);
+		  if (clone.querySelectorAll) {
+		    clone.querySelectorAll('.anchor-ts').forEach(n => n.remove());
+		  }
+		  ael.textContent = (clone.textContent || '').trim();
 		  l.appendChild(ael);
 		  toc.appendChild(l);
 		});
@@ -42,9 +49,23 @@
 	}
 	window.addEventListener('load', buildTOC);
   </script>
+  <script>
+	// Minimal drawer toggle - attach after DOM is ready and guard missing elements
+	window.addEventListener('DOMContentLoaded', () => {
+		const toggle = document.getElementById('logtee-toggle');
+		const toc = document.getElementById('logtee-toc');
+		const log = document.getElementById('logtee-log');
+		if (!toggle || !toc || !log) return;
+			toggle.addEventListener('click', () => {
+				const closed = toc.classList.toggle('closed');
+ 				log.style.marginLeft = closed ? '16px' : '150px';
+			});
+	});
+  </script>
 </head>
 <body>
-  <div class="toc" id="logtee-toc"></div>
+	<button class="toggle-btn" id="logtee-toggle">☰</button>
+	<div class="toc" id="logtee-toc"></div>
   <div class="log" id="logtee-log">
   <!-- INSERT_LOG -->
   <!-- LOGTEEHTML_FOOTER -->
