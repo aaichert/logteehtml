@@ -15,6 +15,11 @@ import rich
 _FOOTER_MARKER = "<!-- LOGTEEHTML_FOOTER -->"
 _CHUNK_CLOSER = "</pre></div>\n"
 
+# Regex: Rich panel top border e.g. "╭─ Title ─────────╮"
+_RICH_PANEL_TOP_RE = re.compile(r'^╭─\s*(.*?)\s*─*╮\s*$')
+# Regex: Markdown-style heading lines we want to auto-anchor, e.g. "### Some Title" (3+ leading #)
+_MARKDOWN_HEADING_RE = re.compile(r'^(#{3,})\s+(.+?)\s*$')
+
 
 def _slugify(s: str) -> str:
 	s = s.lower()
@@ -74,6 +79,10 @@ class _StreamProxy:
 		return getattr(self._orig, 'encoding', 'utf-8')
 
 
+
+def _is_non_printable_only(text: str) -> bool:
+	# Returns True if text contains only whitespace or non-printable characters
+	return not text.strip() or all(ord(c) < 32 or ord(c) == 127 for c in text if c != '\n')
 
 class LogTeeHTML:
 	"""Append-only HTML logger that keeps on-disk file a valid HTML document by seek-and-rewrite of a small footer region.
@@ -136,10 +145,25 @@ class LogTeeHTML:
 		return self
 
 	def __exit__(self, exc_type, exc_val, exc_tb):
-		# close file handle
+		# If an exception occurred inside the context, capture and write traceback
+		# to the HTML log before restoring original streams. This ensures it is
+		# persisted even though Python prints the traceback only after __exit__.
+		if exc_type is not None and self._fh and not self._fh.closed:
+			try:
+				import traceback
+				# Break any current mergeable chunk so traceback starts a fresh stderr chunk
+				self._last_chunk_type = None
+				self._last_chunk_base = None
+				self.print("\n--- Unhandled Exception (will be re-raised) ---\n", chunk_type='stderr')
+				for line in traceback.format_exception(exc_type, exc_val, exc_tb):
+					self.print(line, chunk_type='stderr')
+			except Exception:
+				# Best effort: never let logging of traceback itself raise
+				pass
 		# restore stdout/stderr
 		sys.stdout = getattr(self, '_orig_stdout', sys.stdout)
 		sys.stderr = getattr(self, '_orig_stderr', sys.stderr)
+		# close file handle
 		if self._fh and not self._fh.closed:
 			self._fh.close()
 
@@ -292,24 +316,16 @@ class LogTeeHTML:
 
 	# --- public API ---
 	def start(self, section_name: str):
-		# close any open mergeable chunk and ANSI spans
-		self._last_chunk_type = None
-		close_span = self._close_ansi_spans()
-		if close_span:
-			self._insert_bytes(close_span.encode('utf8'))
+		self.end_chunk()
 		sid = _slugify(section_name)
 		h = f'<h1 id="{sid}">{section_name}</h1>\n'
 		self._insert_bytes(h.encode('utf8'))
 		# track current section id for anchors
 		self._current_section_id = sid
 
-	def anchor(self, anchor_text: str, anchor_name: Optional[str] = None):
+	def anchor(self, anchor_text: str, anchor_name: Optional[str] = None, print_link: bool = True):
 		# close any open mergeable chunk and ANSI spans
-		self._last_chunk_type = None
-		self._last_chunk_base = None
-		close_span = self._close_ansi_spans()
-		if close_span:
-			self._insert_bytes(close_span.encode('utf8'))
+		self.end_chunk()
 		if anchor_name is None:
 			base = _slugify(anchor_text)
 			anchor_name = f"{base}-{uuid.uuid4().hex[:6]}"
@@ -327,15 +343,30 @@ class LogTeeHTML:
 			link_path = os.path.join(self.logfile_prefix, self.filepath)
 		else:
 			link_path = path
-		# write directly to the real stdout to avoid re-capture by the proxy
-		real = getattr(sys, '__stdout__', None)
-		if real and hasattr(real, 'fileno'):
-			os.write(real.fileno(), "\n".encode('utf8'))
-			os.write(real.fileno(), f"[🔗{anchor_text}](file://{link_path}#{anchor_name})\n".encode('utf8'))
-		else:
-			if hasattr(self, '_orig_stdout') and self._orig_stdout:
-				self._orig_stdout.write(f"[🔗{anchor_text}](file://{link_path}#{anchor_name})\n")
-				self._orig_stdout.flush()
+		if print_link:
+			# write directly to the real stdout to avoid re-capture by the proxy
+			real = getattr(sys, '__stdout__', None)
+			url=os.path.normpath(f"{link_path}#{anchor_name}")
+			if real and hasattr(real, 'fileno'):
+				os.write(real.fileno(), "\n".encode('utf8'))
+				os.write(real.fileno(), f"[🔗{anchor_text}]( file://{url} )\n".encode('utf8'))
+			else:
+				if hasattr(self, '_orig_stdout') and self._orig_stdout:
+					self._orig_stdout.write(f"[🔗{anchor_text}]( file://{url} )\n")
+					self._orig_stdout.flush()
+
+	def end_chunk(self):
+		"""Force termination of the current mergeable chunk.
+
+		Any subsequent print / inject call will start a new chunk. Also closes
+		any open ANSI span so style state does not leak into the next chunk.
+		Safe to call even if no chunk is open (idempotent).
+		"""
+		self._last_chunk_type = None
+		self._last_chunk_base = None
+		close_span = self._close_ansi_spans()
+		if close_span:
+			self._insert_bytes(close_span.encode('utf8'))
 
 
 	def _find_last_chunk_start(self, chunk_type: str) -> Optional[int]:
@@ -434,11 +465,34 @@ class LogTeeHTML:
 			# refresh marker cache after modifying the file
 			self._marker_pos_cache = self._find_marker()
 
+
 	def print(self, data, chunk_type: str = 'stdout'):
 		text = data if isinstance(data, str) else str(data)
+		
+		# Auto-anchor detection for Rich panel headers and markdown-like headings.
+		# This is done before ANSI/state handling and merging decisions.
+		if text:
+			# Fast pre-check to avoid per-line loops when unnecessary
+			if text.startswith('╭─') or text.startswith('###') or ('\n╭─' in text) or ('\n###' in text):
+				for raw_line in text.splitlines():
+					# Ignore overly long lines for auto anchor detection
+					if len(raw_line) > 160:
+						continue
+					line = raw_line.strip('\r')
+					if line.startswith('╭─'):
+						m_panel = _RICH_PANEL_TOP_RE.match(line)
+						if m_panel:
+							title = m_panel.group(1)
+							if title:
+								self.anchor(title, print_link=False)
+							continue
+					m_md = _MARKDOWN_HEADING_RE.match(line)
+					if m_md:
+						_, title = m_md.groups()
+						if title:
+							self.anchor(title, print_link=False)
+						continue
 		# detect cursor/control sequences conservatively
-		# Treat SGR ('m') as styling (keep in stdout/stderr). Only mark as ansi-cursor
-		# when we see control sequences whose final byte is not 'm' (cursor movement, clear line, etc.)
 		has_ansi = False
 		only_m = True
 		if '\x1b[' in text:
@@ -458,9 +512,9 @@ class LogTeeHTML:
 		# If previous chunk was 'ansi-cursor', only exit when we get a complete line (ending with \n) with no complex ANSI or control chars
 		has_control_chars = '\r' in text or '\b' in text
 		if (self._last_chunk_type == 'ansi-cursor' and 
-		    text.endswith('\n') and 
-		    (not has_ansi or only_m) and
-		    not has_control_chars):
+			text.endswith('\n') and 
+			(not has_ansi or only_m) and
+			not has_control_chars):
 			self._last_chunk_type = None
 			self._last_chunk_base = None
 			chunk_type = 'stdout'  # Reset to stdout after exiting ansi-cursor
@@ -468,8 +522,6 @@ class LogTeeHTML:
 		# convert ANSI to HTML where possible, otherwise escape
 		if '\x1b[' in text:
 			if chunk_type == 'ansi-cursor':
-				# For ansi-cursor chunks, strip out cursor movement sequences but keep SGR (color/font)
-				# Remove non-SGR sequences (cursor movement, clear line, etc.)
 				stripped = re.sub(r'\x1b\[[0-9;]*[A-Za-z](?<!m)', '', text)
 				escaped = self._ansi_to_html_stateful(stripped)
 			else:
@@ -479,19 +531,26 @@ class LogTeeHTML:
 
 		# Decide merge vs new chunk
 		mergeable = chunk_type in ('stdout', 'stderr', 'ansi-cursor')
+		# Always merge consecutive mergeable chunks, even for non-printable-only data
 		if '\r' in text and mergeable and self._last_chunk_base == chunk_type:
 			self._apply_carriage_return(text, chunk_type)
 			return
 		if mergeable and self._last_chunk_base == chunk_type:
+			# If data is only non-printable, just append
+			if _is_non_printable_only(text):
+				self._insert_before_closer(escaped.encode('utf8'))
+				return
+			# Otherwise, merge as usual
 			inner = escaped
 			self._insert_before_closer(inner.encode('utf8'))
-		else:
-			wrapper = f'<div class="{chunk_type}"><pre>{escaped}</pre></div>\n'
-			self._insert_bytes(wrapper.encode('utf8'))
-			self._last_chunk_type = chunk_type if mergeable else None
-			self._last_chunk_base = chunk_type if mergeable else None
+			return
+		# Otherwise, start a new chunk
+		wrapper = f'<div class="{chunk_type}"><pre>{escaped}</pre></div>\n'
+		self._insert_bytes(wrapper.encode('utf8'))
+		self._last_chunk_type = chunk_type if mergeable else None
+		self._last_chunk_base = chunk_type if mergeable else None
 
-	def inject_html(self, html_content: str, anchor_text: Optional[str] = None, anchor_name: Optional[str] = None):
+	def inject_html(self, html_content: str, anchor_text: Optional[str] = None, anchor_name: Optional[str] = None, print_link: bool = True):
 		# inject HTML fragment wrapped in a collapsible chunk
 		# Ensure we don't merge this injection into any open stdout/stderr chunk and close ANSI spans
 		self._last_chunk_type = None
@@ -502,7 +561,7 @@ class LogTeeHTML:
 		if anchor_text is not None:
 			if anchor_name is None:
 				anchor_name = f"{_slugify(anchor_text)}-{uuid.uuid4().hex[:6]}"
-			self.anchor(anchor_text, anchor_name)
+			self.anchor(anchor_text, anchor_name, print_link=print_link)
 		
 		# Wrap HTML content in a chunk without pre tags
 		wrapper = f'<div class="html-injection">{html_content}</div>\n'
@@ -523,7 +582,7 @@ class LogTeeHTML:
 		# simple HTML table
 		if not table_data:
 			html = '<div><em>empty table</em></div>\n'
-			self.inject_html(html, anchor_text)
+			self.inject_html(html, anchor_text, print_link=False)
 			return
 		keys = list(table_data[0].keys())
 		rows = []

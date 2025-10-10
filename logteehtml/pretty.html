@@ -34,7 +34,7 @@
 		.chunk .label{position:absolute;right:8px;top:8px;display:flex;gap:6px;align-items:center}
 		.chunk .label button{appearance:none;border:0;padding:4px 8px;border-radius:999px;font-size:11px;color:#fff;cursor:pointer;background:rgba(0,0,0,0.15)}
 		.chunk .label button.toggle{background:rgba(0,0,0,0.25)}
-		.chunk .label button.open{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.02)}
+		.chunk .label button.open{background:#222a33;border:1px solid #11151a;color:#fff;}
 
 		/* type colors */
 		.chunk.stdout{border-left:4px solid var(--stdout)}
@@ -129,46 +129,64 @@
 				if(!chunk) return;
 				chunk.classList.toggle('collapsed');
 			}
+
 			if(t.matches('.chunk .label .open')){
 				var chunk = t.closest('.chunk');
 				if(!chunk) return;
-				
 				var content = '';
 				var isHtmlChunk = chunk.classList.contains('html-injection');
-				
+				var anchor = chunk.querySelector('[id]');
+				var anchorId = anchor ? anchor.id : '';
+				var filename = anchorId ? anchorId + '.html' : 'logtee.html';
+				var windowTitle = anchorId ? anchorId : 'HTML Content';
+
 				if(isHtmlChunk) {
-					// For HTML chunks, get all content except the label
 					var clonedChunk = chunk.cloneNode(true);
 					var label = clonedChunk.querySelector('.label');
 					if(label) label.remove();
 					content = clonedChunk.innerHTML;
 				} else {
-					// For other chunks, look for pre element
 					var pre = chunk.querySelector('pre');
 					if(!pre) return;
 					content = pre.innerHTML;
 				}
-				
-				var w = window.open('','_blank');
+
+				// Create a Blob and open in new window
+				var blobContent, mimeType;
+				if(isHtmlChunk) {
+					blobContent = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + windowTitle + '</title></head><body>' + content + '</body></html>';
+					mimeType = 'text/html';
+				} else {
+					blobContent = content;
+					mimeType = 'text/plain';
+				}
+				var blob = new Blob([blobContent], {type: mimeType});
+				var url = URL.createObjectURL(blob);
+
+				// Open window and set title
+				var w = window.open(url, '_blank');
 				if(!w) {
 					alert('Popup blocked. Please allow popups for this site.');
 					return;
 				}
-				
-				try{
-					w.document.open();
-					if(isHtmlChunk) {
-						// Write proper HTML document for HTML chunks
-						w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>HTML Content</title></head><body>' + content + '</body></html>');
-					} else {
-						// Write as plain text for other chunks
-						w.document.write('<pre style="font-family: monospace; white-space: pre-wrap;">' + content + '</pre>');
+				// Try to set window title after load
+				w.onload = function(){
+					w.document.title = windowTitle;
+				};
+
+				// Add a download link for default filename
+				setTimeout(function(){
+					if(w.document && w.document.body) {
+						var a = w.document.createElement('a');
+						a.href = url;
+						a.download = filename;
+						a.textContent = 'Download as ' + filename;
+						a.style.display = 'block';
+						a.style.margin = '16px 0';
+						a.style.fontSize = '16px';
+						w.document.body.insertBefore(a, w.document.body.firstChild);
 					}
-					w.document.close();
-				}catch(err){
-					// Fallback: use document.body for plain text
-					w.document.body.innerHTML = '<pre style="font-family: monospace; white-space: pre-wrap;">' + (content || 'Error loading content') + '</pre>';
-				}
+				}, 300);
 			}
 		});
 
